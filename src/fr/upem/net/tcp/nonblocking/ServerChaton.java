@@ -21,8 +21,8 @@ public class ServerChaton {
 	static private class Context {
 		private final SelectionKey key;
 		private final SocketChannel sc;
-		private final ByteBuffer bufferIn = ByteBuffer.allocate(2 * (BUFFER_SIZE + Integer.BYTES));
-		private final ByteBuffer bufferOut = ByteBuffer.allocate(2 * (BUFFER_SIZE + Integer.BYTES));
+		private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
+		private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
 		private final ArrayDeque<Message> queueMsg = new ArrayDeque<>();
 		private final ArrayDeque<String> queue = new ArrayDeque<>();
 		private final ServerChaton server; // we could also have Context as an instance class, which would naturally
@@ -50,11 +50,11 @@ public class ServerChaton {
 		 */
 		private void processIn() {
 			Reader.ProcessStatus status;
+			bufferIn.flip();
 			while(true) {
 				switch (bufferIn.getInt()) {
 					case 0 : {
 						status = stringReader.process(bufferIn);
-						System.out.println("ALED");
 						switch (status) {
 							case DONE:
 								var checkLogin = stringReader.get();
@@ -153,16 +153,20 @@ public class ServerChaton {
 				return;
 			}
 			if (opCode == 2) {
+				bufferOut.limit(BUFFER_SIZE);
 				var serv = queue.poll();
 				if (serv == null) {
 					return;
 				}
 				var encodedServ = StandardCharsets.UTF_8.encode(serv);
 				bufferOut.putInt(2).putInt(encodedServ.remaining()).put(encodedServ);
+				bufferOut.limit(bufferOut.position());
 				return;
 			}
 			if (opCode == 3) {
+				bufferOut.limit(BUFFER_SIZE);
 				bufferOut.putInt(3);
+				bufferOut.limit(bufferOut.position());
 				return;
 			}
 
@@ -183,9 +187,11 @@ public class ServerChaton {
 				return;
 			}
 			if (opCode == 4) {
+				bufferOut.limit(BUFFER_SIZE);
 				bufferOut.putInt(4).putInt(server.remaining()).put(server);
 				bufferOut.putInt(login.remaining()).put(login);
 				bufferOut.putInt(text.remaining()).put(text);
+				bufferOut.limit(bufferOut.position());
 			}
 			if (opCode == 5) {
 				var serverDst = StandardCharsets.UTF_8.encode(message.getServerDst());
@@ -196,11 +202,13 @@ public class ServerChaton {
 				if (loginDst.remaining() > 30) {
 					return;
 				}
+				bufferOut.limit(bufferOut.limit());
 				bufferOut.putInt(5).putInt(server.remaining()).put(server);
 				bufferOut.putInt(login.remaining()).put(login);
 				bufferOut.putInt(serverDst.remaining()).put(serverDst);
 				bufferOut.putInt(loginDst.remaining()).put(loginDst);
 				bufferOut.putInt(text.remaining()).put(text);
+				bufferOut.limit(bufferOut.position());
 			}
 		}
 
@@ -269,7 +277,7 @@ public class ServerChaton {
 
 	}
 
-	private static final int BUFFER_SIZE = 1_024;
+	private static final int BUFFER_SIZE = 10_000;
 	private static final Logger logger = Logger.getLogger(ServerChaton.class.getName());
 
 	private final ServerSocketChannel serverSocketChannel;

@@ -51,10 +51,14 @@ public class ClientChat {
          */
         private void processIn() {
             Reader.ProcessStatus status;
+            bufferIn.flip();
+            int opCode = bufferIn.getInt();
+            bufferIn.flip();
             while(true) {
-                switch (bufferIn.getInt()) {
+                switch (opCode) {
                     case 2 : {
                         status = stringReader.process(bufferIn);
+                        System.out.println(status);
                         switch (status) {
                             case DONE:
                                 nameServer = stringReader.get();
@@ -65,7 +69,6 @@ public class ClientChat {
                             case ERROR:
                                 silentlyClose();
                                 return;
-
                         }
                     }
                     case 3 : {
@@ -104,7 +107,7 @@ public class ClientChat {
                     }
 
                     default:
-                        System.out.println("Unknown pack");
+                        break;
                 }
             }
         }

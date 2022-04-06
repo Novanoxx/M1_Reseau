@@ -20,7 +20,9 @@ public class StringReader implements Reader<String> {
         if (state == State.DONE || state == State.ERROR) {
             throw new IllegalStateException();
         }
+        System.out.println(bb.remaining());
         bb.flip();
+        System.out.println(bb.remaining());
         try {
             if (state == State.WAITING_SIZE) {
                 var oldLimit = bb.limit();
