@@ -6,10 +6,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channel;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -31,16 +28,18 @@ public class ClientChat {
         private final SocketChannel sc;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
         private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
-        private final ArrayDeque<Login> queueLogin = new ArrayDeque<>();
         private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
         private boolean closed = false;
         private String login = null;
+        private String nameServer = null;
         private final PrivateMessageReader privateReader = new PrivateMessageReader();
         private final PublicMessageReader publicReader = new PublicMessageReader();
+        private final StringReader stringReader = new StringReader();
 
-        private Context(SelectionKey key) {
+        private Context(SelectionKey key, String login) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
+            this.login = login;
         }
 
         /**
@@ -54,6 +53,26 @@ public class ClientChat {
             Reader.ProcessStatus status;
             while(true) {
                 switch (bufferIn.getInt()) {
+                    case 2 : {
+                        status = stringReader.process(bufferIn);
+                        switch (status) {
+                            case DONE:
+                                nameServer = stringReader.get();
+                                System.out.println("Welcome in " + nameServer);
+                                break;
+                            case REFILL:
+                                return;
+                            case ERROR:
+                                silentlyClose();
+                                return;
+
+                        }
+                    }
+                    case 3 : {
+                        System.out.println("Login failed");
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                     case 4 : {
                         status = publicReader.process(bufferIn);
                         switch (status) {
@@ -100,22 +119,14 @@ public class ClientChat {
             updateInterestOps();
         }
 
-        private void queueLogin(Login login) {
-            queueLogin.add(login);
-            processOut();
-            updateInterestOps();
-        }
-
         /**
          * Try to fill bufferOut from the message queue
          *
          */
         private void processOut() {
-            if (login == null) {
-                var log = queueLogin.poll();
-                Objects.requireNonNull(log);
-                var login = UTF8.encode(log.login());
-                bufferOut.putInt(log.opCode()).putInt(login.remaining()).put(login);
+            if (nameServer == null) {
+                var encoded = UTF8.encode(login);
+                bufferOut.putInt(0).putInt(encoded.remaining()).put(encoded);
                 return;
             }
             if (bufferOut.remaining() < Integer.BYTES) {
@@ -242,9 +253,8 @@ public class ClientChat {
     private Path path;
     private final Thread console;
     private Context uniqueContext;
-    private final ArrayDeque<Login> queueLogin = new ArrayDeque<>();
     private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
-    private boolean connected = false;
+    private boolean logged = false;
 
     private final Object lock = new Object();
 
@@ -280,37 +290,29 @@ public class ClientChat {
 
     private void sendCommand(String msg) throws InterruptedException {
         synchronized (lock) {
-            if (!connected) {
-                if (StandardCharsets.UTF_8.encode(msg).remaining() > 30) {
-                    System.out.println("Login too long");
-                    return;
-                }
-                queueLogin.add(new Login(0, msg));
-            } else {
-                if (msg.startsWith("/+@")) {
-                    StringBuilder tmp = new StringBuilder();
-                    int dot = 0;
-                    int at = 0;
-                    int space = 0;
-                    for (int i = 0; i < msg.length(); i++) {
-                        if (msg.charAt(i) == '@') {
-                            at = 1;
-                        } else if (msg.charAt(i) == ':') {
-                            dot = 1;
-                        } else if (msg.charAt(i) == ' ') {
-                            space = 1;
-                        }
-                        if (dot == 1 && at == 1 && space == 1) {
-                            var data = tmp.toString().split(" ");
-                            var newMsg = msg.split(" ", 2);
-                            queueMessage.add(new PrivateMessage(5, serverAddress.toString(), login, data[0], data[1], newMsg[1]));
-                        } else {
-                            tmp.append(msg.charAt(i));
-                        }
+            if (msg.startsWith("/+@")) {
+                StringBuilder tmp = new StringBuilder();
+                int dot = 0;
+                int at = 0;
+                int space = 0;
+                for (int i = 0; i < msg.length(); i++) {
+                    if (msg.charAt(i) == '@') {
+                        at = 1;
+                    } else if (msg.charAt(i) == ':') {
+                        dot = 1;
+                    } else if (msg.charAt(i) == ' ') {
+                        space = 1;
                     }
-                } else {
-                    queueMessage.add(new PublicMessage(4, serverAddress.toString(), login, msg));
+                    if (dot == 1 && at == 1 && space == 1) {
+                        var data = tmp.toString().split(" ");
+                        var newMsg = msg.split(" ", 2);
+                        queueMessage.add(new PrivateMessage(5, serverAddress.toString(), login, data[0], data[1], newMsg[1]));
+                    } else {
+                        tmp.append(msg.charAt(i));
+                    }
                 }
+            } else {
+                queueMessage.add(new PublicMessage(4, serverAddress.toString(), login, msg));
             }
             selector.wakeup();
         }
@@ -322,18 +324,10 @@ public class ClientChat {
 
     private void processCommands() {
         synchronized (lock) {
-            if (!connected) {
-                var pack = queueLogin.poll();
-                while (pack != null) {
-                    uniqueContext.queueLogin(pack);
-                    pack = queueLogin.poll();
-                }
-            } else {
-                var msg = queueMessage.poll();
-                while (msg != null) {
-                    uniqueContext.queueMessage(msg);
-                    msg = queueMessage.poll();
-                }
+            var msg = queueMessage.poll();
+            while (msg != null) {
+                uniqueContext.queueMessage(msg);
+                msg = queueMessage.poll();
             }
         }
     }
@@ -341,7 +335,7 @@ public class ClientChat {
     public void launch() throws IOException {
         sc.configureBlocking(false);
         var key = sc.register(selector, SelectionKey.OP_CONNECT);
-        uniqueContext = new Context(key);
+        uniqueContext = new Context(key, login);
         key.attach(uniqueContext);
         sc.connect(serverAddress);
 
@@ -349,7 +343,12 @@ public class ClientChat {
         while (!Thread.interrupted()) {
             try {
                 selector.select(this::treatKey);
-                processCommands();
+                if (!logged) {
+                    uniqueContext.processOut();
+                    uniqueContext.updateInterestOps();
+                } else {
+                    processCommands();
+                }
             } catch (UncheckedIOException tunneled) {
                 throw tunneled.getCause();
             }
@@ -384,11 +383,11 @@ public class ClientChat {
     }
 
     public static void main(String[] args) throws NumberFormatException, IOException {
-        if (args.length != 3) {
+        if (args.length != 4) {
             usage();
             return;
         }
-        new ClientChat(new InetSocketAddress(args[0], Integer.parseInt(args[1])), Path.of(args[2]), String.valueOf(args[3])).launch();
+        new ClientChat(new InetSocketAddress(args[0], Integer.parseInt(args[1])), Path.of(args[2]), args[3]).launch();
     }
 
     private static void usage() {

@@ -10,6 +10,7 @@ import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Scanner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -22,19 +23,22 @@ public class ServerChaton {
 		private final SocketChannel sc;
 		private final ByteBuffer bufferIn = ByteBuffer.allocate(2 * (BUFFER_SIZE + Integer.BYTES));
 		private final ByteBuffer bufferOut = ByteBuffer.allocate(2 * (BUFFER_SIZE + Integer.BYTES));
-		private final ArrayDeque<Message> queue = new ArrayDeque<>();
+		private final ArrayDeque<Message> queueMsg = new ArrayDeque<>();
+		private final ArrayDeque<String> queue = new ArrayDeque<>();
 		private final ServerChaton server; // we could also have Context as an instance class, which would naturally
 		// give access to ServerChatInt.this
 		private boolean closed = false;
-		private String name;
+		private final String name;
 		private final PrivateMessageReader privateReader = new PrivateMessageReader();
 		private final PublicMessageReader publicReader = new PublicMessageReader();
+		private final StringReader stringReader = new StringReader();
 		//private final FileMessageReader fileMessageReader = new FileMessageReader();
 
-		private Context(ServerChaton server, SelectionKey key) {
+		private Context(ServerChaton server, SelectionKey key, String name) {
 			this.key = key;
 			this.sc = (SocketChannel) key.channel();
 			this.server = server;
+			this.name = name;
 		}
 
 		/**
@@ -48,6 +52,28 @@ public class ServerChaton {
 			Reader.ProcessStatus status;
 			while(true) {
 				switch (bufferIn.getInt()) {
+					case 0 : {
+						status = stringReader.process(bufferIn);
+						System.out.println("ALED");
+						switch (status) {
+							case DONE:
+								var checkLogin = stringReader.get();
+								if (listClient.containsKey(checkLogin)) {
+									System.out.println("Login already used");
+									return;
+								}
+								stringReader.reset();
+								listClient.put(checkLogin, key);
+								server.sendLogin(key);
+								break;
+							case REFILL:
+								return;
+							case ERROR:
+								silentlyClose();
+								return;
+						}
+					}
+
 					case 4 : {
 						status = publicReader.process(bufferIn);
 						switch (status) {
@@ -107,8 +133,14 @@ public class ServerChaton {
 		 * @param msg
 		 */
 		public void queueMessage(Message msg) {
-			queue.add(msg);
-			processOut();
+			queueMsg.add(msg);
+			processOut(msg.getOpCode());
+			updateInterestOps();
+		}
+
+		public void queueString(String str) {
+			queue.add(str);
+			processOut(2);
 			updateInterestOps();
 		}
 
@@ -116,11 +148,25 @@ public class ServerChaton {
 		 * Try to fill bufferOut from the message queue
 		 *
 		 */
-		private void processOut() {
+		private void processOut(int opCode) {
 			if (bufferOut.remaining() < Integer.BYTES) {
 				return;
 			}
-			var message = queue.poll();
+			if (opCode == 2) {
+				var serv = queue.poll();
+				if (serv == null) {
+					return;
+				}
+				var encodedServ = StandardCharsets.UTF_8.encode(serv);
+				bufferOut.putInt(2).putInt(encodedServ.remaining()).put(encodedServ);
+				return;
+			}
+			if (opCode == 3) {
+				bufferOut.putInt(3);
+				return;
+			}
+
+			var message = queueMsg.poll();
 			if (message == null) {
 				return;
 			}
@@ -136,13 +182,12 @@ public class ServerChaton {
 			if (text.remaining() > 1024) {
 				return;
 			}
-
-			if (message.getOpCode() == 4) {
+			if (opCode == 4) {
 				bufferOut.putInt(4).putInt(server.remaining()).put(server);
 				bufferOut.putInt(login.remaining()).put(login);
 				bufferOut.putInt(text.remaining()).put(text);
 			}
-			if (message.getOpCode() == 5) {
+			if (opCode == 5) {
 				var serverDst = StandardCharsets.UTF_8.encode(message.getServerDst());
 				if (serverDst.remaining() > 100) {
 					return;
@@ -231,6 +276,8 @@ public class ServerChaton {
 	private final Selector selector;
 	private final Thread console;
 	private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(10);
+	private static String nameServer;
+	private static HashMap<String, SelectionKey> listClient = new HashMap<>();
 
 	public ServerChaton(int port) throws IOException {
 		serverSocketChannel = ServerSocketChannel.open();
@@ -352,7 +399,7 @@ public class ServerChaton {
 		}
 		sc.configureBlocking(false);
 		var client = sc.register(selector, SelectionKey.OP_READ);
-		client.attach(new Context(this, client));
+		client.attach(new Context(this, client, nameServer));
 	}
 
 	private void silentlyClose(SelectionKey key) {
@@ -382,33 +429,29 @@ public class ServerChaton {
 			}
 
 			case 5: {
-
+				var dest = msg.getLoginDst();
+				var client = listClient.get(dest);
+				if (client == null) {
+					return;
+				}
+				var context = (Context) client.attachment();
+				context.queueMessage(msg);
 			}
 		}
 	}
 
-	public static void main(String[] args) throws NumberFormatException, IOException {
-		if (args.length != 1) {
+	private void sendLogin(SelectionKey key) {
+		var context = (Context) key.attachment();
+		context.queueString(nameServer);
+	}
+
+	public static void main(String[] args) throws NumberFormatException, IOException, InterruptedException {
+		if (args.length != 2) {
 			usage();
 			return;
 		}
-
-		var serverList = new ArrayList<Thread>();
-		var server = new ServerChaton(Integer.parseInt(args[0]));
-
-		for (int i = 0; i < 2; i++) {
-			Thread thread = new Thread(() -> {
-				try {
-					server.launch();
-				} catch (InterruptedException e) {
-					logger.info("Interrupted server\n" + e);
-				} catch (IOException ioe) {
-					logger.log(Level.SEVERE, "Server " + Thread.currentThread().getName() + "problem\n" + ioe);
-				}
-			});
-			serverList.add(thread);
-			thread.start();
-		}
+		nameServer = args[1];
+		new ServerChaton(Integer.parseInt(args[0])).launch();
 	}
 
 	private static void usage() {

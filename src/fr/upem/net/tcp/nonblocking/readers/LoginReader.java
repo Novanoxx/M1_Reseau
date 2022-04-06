@@ -15,7 +15,7 @@ public class LoginReader implements Reader<Login>{
     public ProcessStatus process(ByteBuffer bb) {
         var readerState = reader.process(bb);
         if (readerState == ProcessStatus.DONE) {
-            login = new Login(reader.get());
+            login = new Login(0, reader.get());
         } else {
             return readerState;
         }
