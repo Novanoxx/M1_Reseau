@@ -11,7 +11,7 @@ public record FusionInit(int opCode, String nameServer, InetSocketAddress addres
         var tmpBuffer = ByteBuffer.allocate(10_000);
 
 
-        buffer.putInt(opCode); //op code
+        buffer.putInt(opCode);
 
         //nom du Leader
         tmpBuffer.put(StandardCharsets.UTF_8.encode(nameServer));
