@@ -30,7 +30,7 @@ public class ClientChat {
         private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
         private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
         private boolean closed = false;
-        private String login = null;
+        private final String login;
         private String nameServer = null;
         private final PrivateMessageReader privateReader = new PrivateMessageReader();
         private final PublicMessageReader publicReader = new PublicMessageReader();
@@ -53,17 +53,17 @@ public class ClientChat {
             Reader.ProcessStatus status;
             bufferIn.flip();
             int opCode = bufferIn.getInt();
-            bufferIn.flip();
+            bufferIn.compact();
             while(true) {
                 switch (opCode) {
                     case 2 : {
                         status = stringReader.process(bufferIn);
-                        System.out.println(status);
                         switch (status) {
                             case DONE:
                                 nameServer = stringReader.get();
-                                System.out.println("Welcome in " + nameServer);
-                                break;
+                                System.out.println("Welcome " + login + " in " + nameServer);
+                                logged = true;
+                                return;
                             case REFILL:
                                 return;
                             case ERROR:
@@ -80,7 +80,7 @@ public class ClientChat {
                         status = publicReader.process(bufferIn);
                         switch (status) {
                             case DONE:
-                                System.out.println(publicReader.get().login() + " : " + publicReader.get().msg());
+                                System.out.println("Public: " + publicReader.get().login() + " from " + nameServer + " : " + publicReader.get().msg());
                                 publicReader.reset();
                                 break;
                             case REFILL:
@@ -95,7 +95,7 @@ public class ClientChat {
                         status = privateReader.process(bufferIn);
                         switch (status) {
                             case DONE:
-                                System.out.println(privateReader.get().loginSrc() + "from " + privateReader.get().serverSrc() + " : " + privateReader.get().msg());
+                                System.out.println("Private: " + privateReader.get().loginSrc() + "from " + privateReader.get().serverSrc() + " : " + privateReader.get().msg());
                                 privateReader.reset();
                                 break;
                             case REFILL:
@@ -118,6 +118,11 @@ public class ClientChat {
          */
         private void queueMessage(Message msg) {
             queueMessage.add(msg);
+            processOut();
+            updateInterestOps();
+        }
+
+        private void sendLogin() {
             processOut();
             updateInterestOps();
         }
@@ -257,7 +262,7 @@ public class ClientChat {
     private final Thread console;
     private Context uniqueContext;
     private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
-    private boolean logged = false;
+    private static boolean logged = false;
 
     private final Object lock = new Object();
 
@@ -327,11 +332,15 @@ public class ClientChat {
 
     private void processCommands() {
         synchronized (lock) {
-            var msg = queueMessage.poll();
-            while (msg != null) {
-                uniqueContext.queueMessage(msg);
-                msg = queueMessage.poll();
+            if (logged) {
+                var msg = queueMessage.poll();
+                while (msg != null) {
+                    uniqueContext.queueMessage(msg);
+                    msg = queueMessage.poll();
+                }
+                return;
             }
+            uniqueContext.sendLogin();
         }
     }
 
@@ -346,12 +355,7 @@ public class ClientChat {
         while (!Thread.interrupted()) {
             try {
                 selector.select(this::treatKey);
-                if (!logged) {
-                    uniqueContext.processOut();
-                    uniqueContext.updateInterestOps();
-                } else {
-                    processCommands();
-                }
+                processCommands();
             } catch (UncheckedIOException tunneled) {
                 throw tunneled.getCause();
             }

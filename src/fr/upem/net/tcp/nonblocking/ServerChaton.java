@@ -51,8 +51,10 @@ public class ServerChaton {
 		private void processIn() {
 			Reader.ProcessStatus status;
 			bufferIn.flip();
+			var tmp = bufferIn.getInt();
+			bufferIn.compact();
 			while(true) {
-				switch (bufferIn.getInt()) {
+				switch (tmp) {
 					case 0 : {
 						status = stringReader.process(bufferIn);
 						switch (status) {
@@ -65,7 +67,7 @@ public class ServerChaton {
 								stringReader.reset();
 								listClient.put(checkLogin, key);
 								server.sendLogin(key);
-								break;
+								return;
 							case REFILL:
 								return;
 							case ERROR:
