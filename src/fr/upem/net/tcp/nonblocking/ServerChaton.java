@@ -54,13 +54,15 @@ public class ServerChaton {
 			bufferIn.compact();
 			while(true) {
 				switch (tmp) {
-					case 0 : {
+					case 0 :
 						status = stringReader.process(bufferIn);
 						switch (status) {
 							case DONE:
 								var checkLogin = stringReader.get();
 								if (listClient.containsKey(checkLogin)) {
 									System.out.println("Login already used");
+									processOut(3);
+									silentlyClose();
 									return;
 								}
 								stringReader.reset();
@@ -73,9 +75,9 @@ public class ServerChaton {
 								silentlyClose();
 								return;
 						}
-					}
+					break;
 
-					case 4 : {
+					case 4 :
 						status = publicReader.process(bufferIn);
 						switch (status) {
 							case DONE:
@@ -89,9 +91,9 @@ public class ServerChaton {
 								silentlyClose();
 								return;
 						}
-					}
+					break;
 
-					case 5 : {
+					case 5 :
 						status = privateReader.process(bufferIn);
 						switch (status) {
 							case DONE:
@@ -105,7 +107,7 @@ public class ServerChaton {
 								silentlyClose();
 								return;
 						}
-					}
+					break;
 				}
 			}
 		}
@@ -136,7 +138,6 @@ public class ServerChaton {
 				return;
 			}
 			if (opCode == 2) {
-				bufferOut.limit(BUFFER_SIZE);
 				var serv = queue.poll();
 				if (serv == null) {
 					return;
@@ -147,7 +148,6 @@ public class ServerChaton {
 				return;
 			}
 			if (opCode == 3) {
-				bufferOut.limit(BUFFER_SIZE);
 				bufferOut.putInt(3);
 				bufferOut.limit(bufferOut.position());
 				return;
@@ -268,7 +268,7 @@ public class ServerChaton {
 	private final Thread console;
 	private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(10);
 	private static String nameServer;
-	private static HashMap<String, SelectionKey> listClient = new HashMap<>();
+	private static final HashMap<String, SelectionKey> listClient = new HashMap<>();
 
 	public ServerChaton(int port) throws IOException {
 		serverSocketChannel = ServerSocketChannel.open();
