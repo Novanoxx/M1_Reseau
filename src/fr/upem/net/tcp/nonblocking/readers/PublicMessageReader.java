@@ -40,6 +40,7 @@ public class PublicMessageReader implements Reader<PublicMessage>{
     @Override
     public void reset() {
         state = State.WAITING;
+        lst.clear();
         reader.reset();
     }
 }

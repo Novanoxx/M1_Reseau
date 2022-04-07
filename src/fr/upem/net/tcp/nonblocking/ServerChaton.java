@@ -81,9 +81,7 @@ public class ServerChaton {
 							case DONE:
 								var value = publicReader.get();
 								server.broadcast(value, 4);
-								System.out.println("avant reset :" + value.getMsg());
 								publicReader.reset();
-								System.out.println("apres reset :" + value.getMsg());
 								break;
 							case REFILL:
 								return;

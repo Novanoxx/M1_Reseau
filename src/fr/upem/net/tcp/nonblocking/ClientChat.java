@@ -51,12 +51,13 @@ public class ClientChat {
             bufferIn.compact();
             while(true) {
                 switch (opCode) {
-                    case 2 : {
+                    case 2 :
                         status = stringReader.process(bufferIn);
                         switch (status) {
                             case DONE:
                                 nameServer = stringReader.get();
                                 System.out.println("Welcome " + login + " in " + nameServer);
+                                stringReader.reset();
                                 break;
                             case REFILL:
                                 return;
@@ -64,13 +65,14 @@ public class ClientChat {
                                 silentlyClose();
                                 return;
                         }
-                    }
-                    case 3 : {
+                        break;
+
+                    case 3 :
                         System.out.println("Login failed");
                         silentlyClose();
                         break;
-                    }
-                    case 4 : {
+
+                    case 4 :
                         status = publicReader.process(bufferIn);
                         switch (status) {
                             case DONE:
@@ -84,8 +86,9 @@ public class ClientChat {
                                 return;
 
                         }
-                    }
-                    case 5 : {
+                        break;
+
+                    case 5 :
                         status = privateReader.process(bufferIn);
                         switch (status) {
                             case DONE:
@@ -98,7 +101,7 @@ public class ClientChat {
                                 silentlyClose();
                                 return;
                         }
-                    }
+                        break;
                 }
             }
         }
