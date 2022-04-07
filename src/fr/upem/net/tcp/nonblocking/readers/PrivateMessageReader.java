@@ -15,7 +15,7 @@ public class PrivateMessageReader implements Reader<PrivateMessage>{
 
     @Override
     public ProcessStatus process(ByteBuffer bb) {
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 5; i++) {
             var readerState = reader.process(bb);
             if (readerState == ProcessStatus.DONE) {
                 lst.add(reader.get());

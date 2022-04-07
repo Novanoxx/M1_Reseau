@@ -25,8 +25,8 @@ public class ServerChaton {
 		private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
 		private final ArrayDeque<Message> queueMsg = new ArrayDeque<>();
 		private final ArrayDeque<String> queue = new ArrayDeque<>();
-		private final ServerChaton server; // we could also have Context as an instance class, which would naturally
-		// give access to ServerChatInt.this
+		private final ServerChaton server;
+
 		private boolean closed = false;
 		private final String name;
 		private final PrivateMessageReader privateReader = new PrivateMessageReader();
@@ -269,11 +269,13 @@ public class ServerChaton {
 	private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(10);
 	private static String nameServer;
 	private static final HashMap<String, SelectionKey> listClient = new HashMap<>();
+	private static final HashMap<Integer, Server> listServer = new HashMap<>();
 
 	public ServerChaton(int port) throws IOException {
 		serverSocketChannel = ServerSocketChannel.open();
 		serverSocketChannel.bind(new InetSocketAddress(port));
 		selector = Selector.open();
+		listServer.put(port, new Server(new InetSocketAddress(port), nameServer));
 		this.console = new Thread(this::consoleRun);
 	}
 
@@ -303,7 +305,8 @@ public class ServerChaton {
 		if (queue.isEmpty()) {
 			return;
 		}
-		switch (queue.poll().toUpperCase()) {
+		var command = queue.poll().toUpperCase();
+		switch (command) {
 			case "INFO" -> {
 				int nbConnectedClient = 0;
 				for (var key : selector.keys()) {
@@ -333,6 +336,9 @@ public class ServerChaton {
 			default -> {
 				break;
 			}
+		}
+		if (command.startsWith("FUSION")) {
+			// check for the leader in listServer
 		}
 	}
 
@@ -446,6 +452,6 @@ public class ServerChaton {
 	}
 
 	private static void usage() {
-		System.out.println("Usage : ServerChaton port");
+		System.out.println("Usage : ServerChaton port name");
 	}
 }

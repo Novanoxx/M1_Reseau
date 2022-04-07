@@ -92,7 +92,7 @@ public class ClientChat {
                         status = privateReader.process(bufferIn);
                         switch (status) {
                             case DONE:
-                                System.out.println("Private: " + privateReader.get().loginSrc() + "from " + privateReader.get().serverSrc() + " : " + privateReader.get().msg());
+                                System.out.println("Private: " + privateReader.get().loginSrc() + " from " + privateReader.get().serverSrc() + " : " + privateReader.get().msg());
                                 privateReader.reset();
                                 break;
                             case REFILL:
@@ -290,29 +290,14 @@ public class ClientChat {
 
     private void sendCommand(String msg) throws InterruptedException {
         synchronized (lock) {
-            if (msg.startsWith("/+@")) {
-                StringBuilder tmp = new StringBuilder();
-                int dot = 0;
-                int at = 0;
-                int space = 0;
-                for (int i = 0; i < msg.length(); i++) {
-                    if (msg.charAt(i) == '@') {
-                        at = 1;
-                    } else if (msg.charAt(i) == ':') {
-                        dot = 1;
-                    } else if (msg.charAt(i) == ' ') {
-                        space = 1;
-                    }
-                    if (dot == 1 && at == 1 && space == 1) {
-                        var data = tmp.toString().split(" ");
-                        var newMsg = msg.split(" ", 2);
-                        queueMessage.add(new PrivateMessage(5, serverAddress.toString(), login, data[0], data[1], newMsg[1]));
-                    } else {
-                        tmp.append(msg.charAt(i));
-                    }
-                }
-            } else {
-                queueMessage.add(new PublicMessage(4, serverAddress.toString(), login, msg));
+            String[] messagePrive;
+            if (msg.startsWith("@")) {
+                messagePrive = msg.split("@", 2);
+                String[] login0ServerMessage1 = messagePrive[1].split(":", 2);
+                String[] server0Message1 = login0ServerMessage1[1].split(" ", 2);
+                queueMessage.add(new PrivateMessage(5, uniqueContext.nameServer, login, server0Message1[0], login0ServerMessage1[0], server0Message1[1]));
+            }else {
+                queueMessage.add(new PublicMessage(4, uniqueContext.nameServer, login, msg));
             }
             selector.wakeup();
         }
