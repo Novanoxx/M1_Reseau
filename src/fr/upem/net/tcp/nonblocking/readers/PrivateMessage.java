@@ -29,6 +29,6 @@ public record PrivateMessage(int opCode, String serverSrc, String loginSrc, Stri
 
     @Override
     public String getServerDst() {
-        return loginDst;
+        return serverDst;
     }
 }

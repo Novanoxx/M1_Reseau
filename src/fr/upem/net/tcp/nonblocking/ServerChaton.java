@@ -98,7 +98,9 @@ public class ServerChaton {
 						switch (status) {
 							case DONE:
 								var value = privateReader.get();
-								server.broadcast(value, 5);
+								if (listServer.containsKey(value.getServerDst())) {
+									server.broadcast(value, 5);
+								}
 								privateReader.reset();
 								break;
 							case REFILL:
@@ -269,13 +271,13 @@ public class ServerChaton {
 	private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(10);
 	private static String nameServer;
 	private static final HashMap<String, SelectionKey> listClient = new HashMap<>();
-	private static final HashMap<Integer, Server> listServer = new HashMap<>();
+	private static final HashMap<String, Server> listServer = new HashMap<>();
 
 	public ServerChaton(int port) throws IOException {
 		serverSocketChannel = ServerSocketChannel.open();
 		serverSocketChannel.bind(new InetSocketAddress(port));
 		selector = Selector.open();
-		listServer.put(port, new Server(new InetSocketAddress(port), nameServer));
+		listServer.put(nameServer, new Server(new InetSocketAddress(port), port));
 		this.console = new Thread(this::consoleRun);
 	}
 
