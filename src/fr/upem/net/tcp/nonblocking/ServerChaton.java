@@ -33,11 +33,11 @@ public class ServerChaton {
 		private final PublicMessageReader publicReader = new PublicMessageReader();
 		private final StringReader stringReader = new StringReader();
 
-		private Context(ServerChaton server, SelectionKey key, String name) {
+		private Context(ServerChaton server, SelectionKey key) {
 			this.key = key;
 			this.sc = (SocketChannel) key.channel();
 			this.server = server;
-			this.name = name;
+			this.name = nameServer;
 		}
 
 		/**
@@ -195,6 +195,9 @@ public class ServerChaton {
 				bufferOut.putInt(text.remaining()).put(text);
 				bufferOut.limit(bufferOut.position());
 			}
+			if (opCode == 8) {
+
+			}
 		}
 
 		/**
@@ -271,13 +274,16 @@ public class ServerChaton {
 	private final BlockingQueue<String> queue = new ArrayBlockingQueue<>(10);
 	private static String nameServer;
 	private static final HashMap<String, SelectionKey> listClient = new HashMap<>();
-	private static final HashMap<String, Server> listServer = new HashMap<>();
+	private static final HashMap<String, SelectionKey> listServer = new HashMap<>();
+	private static boolean leader = true;
+	private final InetSocketAddress address;
 
 	public ServerChaton(int port) throws IOException {
 		serverSocketChannel = ServerSocketChannel.open();
-		serverSocketChannel.bind(new InetSocketAddress(port));
+		this.address = new InetSocketAddress(port);
+		serverSocketChannel.bind(address);
 		selector = Selector.open();
-		listServer.put(nameServer, new Server(new InetSocketAddress(port), port));
+		listServer.put(nameServer, null);
 		this.console = new Thread(this::consoleRun);
 	}
 
@@ -303,7 +309,7 @@ public class ServerChaton {
 		selector.wakeup();
 	}
 
-	private void processCommands() {
+	private void processCommands() throws IOException {
 		if (queue.isEmpty()) {
 			return;
 		}
@@ -340,7 +346,17 @@ public class ServerChaton {
 			}
 		}
 		if (command.startsWith("FUSION")) {
+			var commandSplit = command.split(" ");
 			// check for the leader in listServer
+			if (leader) {
+				var sc = SocketChannel.open();
+				sc.configureBlocking(false);
+				var server = sc.register(selector, SelectionKey.OP_CONNECT);
+				server.attach(new Context(this, server));
+				sc.connect(new InetSocketAddress(commandSplit[1], Integer.parseInt(commandSplit[2])));
+				var context = (Context) server.attachment();
+				context.queueMessage(new FusionInit(8, nameServer, address, listServer.keySet()));
+			}
 		}
 	}
 
@@ -398,7 +414,7 @@ public class ServerChaton {
 		}
 		sc.configureBlocking(false);
 		var client = sc.register(selector, SelectionKey.OP_READ);
-		client.attach(new Context(this, client, nameServer));
+		client.attach(new Context(this, client));
 	}
 
 	private void silentlyClose(SelectionKey key) {
