@@ -32,7 +32,6 @@ public class ServerChaton {
 		private final PrivateMessageReader privateReader = new PrivateMessageReader();
 		private final PublicMessageReader publicReader = new PublicMessageReader();
 		private final StringReader stringReader = new StringReader();
-		//private final FileMessageReader fileMessageReader = new FileMessageReader();
 
 		private Context(ServerChaton server, SelectionKey key, String name) {
 			this.key = key;
@@ -67,7 +66,7 @@ public class ServerChaton {
 								stringReader.reset();
 								listClient.put(checkLogin, key);
 								server.sendLogin(key);
-								return;
+								break;
 							case REFILL:
 								return;
 							case ERROR:
@@ -82,7 +81,9 @@ public class ServerChaton {
 							case DONE:
 								var value = publicReader.get();
 								server.broadcast(value, 4);
+								System.out.println("avant reset :" + value.getMsg());
 								publicReader.reset();
+								System.out.println("apres reset :" + value.getMsg());
 								break;
 							case REFILL:
 								return;
@@ -107,24 +108,6 @@ public class ServerChaton {
 								return;
 						}
 					}
-/*
-					case 6 : {
-						status = fileMessageReader.process(bufferIn);
-						switch (status) {
-							case DONE:
-								var value = fileMessageReader.get();
-								server.broadcast(value);
-								fileMessageReader.reset();
-								break;
-							case REFILL:
-								return;
-							case ERROR:
-								silentlyClose();
-								return;
-						}
-					}
-
- */
 				}
 			}
 		}
@@ -225,7 +208,7 @@ public class ServerChaton {
 
 		private void updateInterestOps() {
 			var ops = 0;
-			if (!closed && bufferOut.hasRemaining()) {
+			if (!closed && bufferIn.hasRemaining()) {
 				ops |= SelectionKey.OP_READ;
 			}
 			if (bufferOut.position() != 0){

@@ -17,11 +17,6 @@ import java.util.logging.Logger;
 
 public class ClientChat {
     private static final Charset UTF8 = StandardCharsets.UTF_8;
-    /*
-    static enum OpCodes {
-        ANONYMOUS_LOGIN, PUBLIC_MESSAGE, PRIVATE_MESSAGE
-    }
-     */
 
     static private class Context {
         private final SelectionKey key;
@@ -62,8 +57,7 @@ public class ClientChat {
                             case DONE:
                                 nameServer = stringReader.get();
                                 System.out.println("Welcome " + login + " in " + nameServer);
-                                logged = true;
-                                return;
+                                break;
                             case REFILL:
                                 return;
                             case ERROR:
@@ -73,7 +67,7 @@ public class ClientChat {
                     }
                     case 3 : {
                         System.out.println("Login failed");
-                        Thread.currentThread().interrupt();
+                        silentlyClose();
                         break;
                     }
                     case 4 : {
@@ -105,9 +99,6 @@ public class ClientChat {
                                 return;
                         }
                     }
-
-                    default:
-                        break;
                 }
             }
         }
@@ -118,12 +109,7 @@ public class ClientChat {
          */
         private void queueMessage(Message msg) {
             queueMessage.add(msg);
-            processOut();
-            updateInterestOps();
-        }
-
-        private void sendLogin() {
-            processOut();
+            processOut(msg.getOpCode());
             updateInterestOps();
         }
 
@@ -131,13 +117,8 @@ public class ClientChat {
          * Try to fill bufferOut from the message queue
          *
          */
-        private void processOut() {
-            if (nameServer == null) {
-                var encoded = UTF8.encode(login);
-                bufferOut.putInt(0).putInt(encoded.remaining()).put(encoded);
-                return;
-            }
-            if (bufferOut.remaining() < Integer.BYTES) {
+        private void processOut(int opCode) {
+            if (bufferOut.position() != 0) {
                 return;
             }
             var message = queueMessage.poll();
@@ -145,25 +126,33 @@ public class ClientChat {
                 return;
             }
 
-            var server = UTF8.encode(message.getServerSrc());
-            if (server.remaining() > 100) {
-                return;
-            }
             var login = UTF8.encode(message.getLoginSrc());
             if (login.remaining() > 30) {
                 return;
             }
+
+            if (opCode == 0) {
+                bufferOut.putInt(0).putInt(login.remaining()).put(login);
+                return;
+            }
+
             var text = UTF8.encode(message.getMsg());
             if (text.remaining() > 1024) {
                 return;
             }
 
-            if (message.getOpCode() == 4) {
+            var server = UTF8.encode(message.getServerSrc());
+            if (server.remaining() > 100) {
+                return;
+            }
+
+            if (opCode == 4) {
                 bufferOut.putInt(4).putInt(server.remaining()).put(server);
                 bufferOut.putInt(login.remaining()).put(login);
                 bufferOut.putInt(text.remaining()).put(text);
+                return;
             }
-            if (message.getOpCode() == 5) {
+            if (opCode == 5) {
                 var serverDst = UTF8.encode(message.getServerDst());
                 if (serverDst.remaining() > 100) {
                     return;
@@ -190,8 +179,8 @@ public class ClientChat {
          */
 
         private void updateInterestOps() {
-            var ops = 0;
-            if (!closed && bufferOut.hasRemaining()) {
+            int ops = 0;
+            if (!closed && bufferIn.hasRemaining()) {
                 ops |= SelectionKey.OP_READ;
             }
             if (bufferOut.position() != 0){
@@ -248,6 +237,7 @@ public class ClientChat {
                 return; // selector lied
             }
             key.interestOps(SelectionKey.OP_READ);
+            queueMessage(new Login(0, login));
         }
     }
 
@@ -262,9 +252,8 @@ public class ClientChat {
     private final Thread console;
     private Context uniqueContext;
     private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
-    private static boolean logged = false;
 
-    private final Object lock = new Object();
+    private static final Object lock = new Object();
 
     public ClientChat(InetSocketAddress serverAddress, Path path, String login) throws IOException {
         this.serverAddress = serverAddress;
@@ -332,15 +321,11 @@ public class ClientChat {
 
     private void processCommands() {
         synchronized (lock) {
-            if (logged) {
-                var msg = queueMessage.poll();
-                while (msg != null) {
-                    uniqueContext.queueMessage(msg);
-                    msg = queueMessage.poll();
-                }
-                return;
+            var msg = queueMessage.poll();
+            while (msg != null) {
+                uniqueContext.queueMessage(msg);
+                msg = queueMessage.poll();
             }
-            uniqueContext.sendLogin();
         }
     }
 
@@ -398,6 +383,6 @@ public class ClientChat {
     }
 
     private static void usage() {
-        System.out.println("Usage : ClientChat login hostname port");
+        System.out.println("Usage : ClientChat hostname port pathfile login");
     }
 }
