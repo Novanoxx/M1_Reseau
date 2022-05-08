@@ -1,15 +1,14 @@
 package fr.upem.net.tcp.nonblocking;
 
 import fr.upem.net.tcp.nonblocking.readers.*;
+import fr.upem.net.tcp.nonblocking.readers.type.*;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Scanner;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -24,20 +23,20 @@ public class ServerChaton {
 		private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
 		private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
 		private final ArrayDeque<Message> queueMsg = new ArrayDeque<>();
-		private final ArrayDeque<String> queue = new ArrayDeque<>();
 		private final ServerChaton server;
 
 		private boolean closed = false;
-		private final String name;
 		private final PrivateMessageReader privateReader = new PrivateMessageReader();
 		private final PublicMessageReader publicReader = new PublicMessageReader();
+		private final FusionInitReader fusionInitReader = new FusionInitReader();
+		private final FusionInitOKReader fusionInitOKReader = new FusionInitOKReader();
+		private final FusionInitFWDReader fusionInitFWDReader = new FusionInitFWDReader();
 		private final StringReader stringReader = new StringReader();
 
 		private Context(ServerChaton server, SelectionKey key) {
 			this.key = key;
 			this.sc = (SocketChannel) key.channel();
 			this.server = server;
-			this.name = nameServer;
 		}
 
 		/**
@@ -47,7 +46,7 @@ public class ServerChaton {
 		 * after the call
 		 *
 		 */
-		private void processIn() {
+		private void processIn() throws IOException {
 			Reader.ProcessStatus status;
 			bufferIn.flip();
 			var tmp = bufferIn.getInt();
@@ -55,61 +54,47 @@ public class ServerChaton {
 			while(true) {
 				switch (tmp) {
 					case 0 :
-						status = stringReader.process(bufferIn);
-						switch (status) {
-							case DONE:
-								var checkLogin = stringReader.get();
-								if (listClient.containsKey(checkLogin)) {
-									System.out.println("Login already used");
-									processOut(3);
-									silentlyClose();
-									return;
-								}
-								stringReader.reset();
-								listClient.put(checkLogin, key);
-								server.sendLogin(key);
-								break;
-							case REFILL:
-								return;
-							case ERROR:
-								silentlyClose();
-								return;
+						if (processInConnection() == 0) {
+							return;
 						}
-					break;
 
 					case 4 :
-						status = publicReader.process(bufferIn);
-						switch (status) {
-							case DONE:
-								var value = publicReader.get();
-								server.broadcast(value, 4);
-								publicReader.reset();
-								break;
-							case REFILL:
-								return;
-							case ERROR:
-								silentlyClose();
-								return;
+						if (processInPublicMessage() == 0) {
+							silentlyClose();
 						}
-					break;
 
 					case 5 :
-						status = privateReader.process(bufferIn);
-						switch (status) {
-							case DONE:
-								var value = privateReader.get();
-								if (listServer.containsKey(value.getServerDst())) {
-									server.broadcast(value, 5);
-								}
-								privateReader.reset();
-								break;
-							case REFILL:
+						if (processInPrivateMessage() == 0) {
+							silentlyClose();
+						}
+
+					case 8 :
+						if (processInFusionInit() == 0) {
+							silentlyClose();
+						}
+
+					case 9 :
+						if (processInFusionInitOK() == 0) {
+							silentlyClose();
+						}
+
+					/*
+					case 11 :
+						status = fusionInitFWDReader.process(bufferIn);
+						switch(status) {
+							case DONE :
+								var fusionPack = fusionInitFWDReader.get();
+
+							case REFILL :
 								return;
-							case ERROR:
+							case ERROR :
 								silentlyClose();
 								return;
 						}
 					break;
+					*/
+					default :
+						return;
 				}
 			}
 		}
@@ -121,83 +106,171 @@ public class ServerChaton {
 		 */
 		public void queueMessage(Message msg) {
 			queueMsg.add(msg);
-			processOut(msg.getOpCode());
+			processOut();
 			updateInterestOps();
 		}
 
-		public void queueString(String str) {
-			queue.add(str);
-			processOut(2);
-			updateInterestOps();
+		private int processInConnection() {
+			Reader.ProcessStatus status;
+			status = stringReader.process(bufferIn);
+			switch (status) {
+				case DONE:
+					var checkLogin = stringReader.get();
+					stringReader.reset();
+					if (listClient.containsKey(checkLogin)) {
+						System.out.println("Login already used");
+						queueMessage(new LoginRefused(3));
+					} else {
+						listClient.put(checkLogin, key);
+						var context = (Context) key.attachment();
+						context.queueMessage(new LoginAccepted(2, nameServer));
+					}
+					break;
+				case REFILL:
+					break;
+				case ERROR:
+					return 0;
+			}
+			return 1;
+		}
+
+		private int processInPublicMessage() throws IOException {
+			Reader.ProcessStatus status;
+			status = publicReader.process(bufferIn);
+			switch (status) {
+				case DONE:
+					var value = publicReader.get();
+					server.broadcast(value, 4);
+					publicReader.reset();
+					break;
+				case REFILL:
+					break;
+				case ERROR:
+					return 0;
+			}
+			return 1;
+		}
+
+		private int processInPrivateMessage() throws IOException {
+			Reader.ProcessStatus status;
+			status = privateReader.process(bufferIn);
+			switch (status) {
+				case DONE:
+					var value = privateReader.get();
+					if (listServer.containsKey(value.getServerDst())) {
+						server.broadcast(value, 5);
+					}
+					privateReader.reset();
+					break;
+				case REFILL:
+					break;
+				case ERROR:
+					return 0;
+			}
+			return 1;
+		}
+
+		private int processInFusionInit() throws IOException {
+			Reader.ProcessStatus status;
+			status = fusionInitReader.process(bufferIn);
+			switch (status) {
+				case DONE :
+					var fusionPack = fusionInitReader.get();
+					if (leader) {
+						boolean flag = false;
+						for (var nameServer : fusionPack.nameServers()) {
+							if (listServer.containsKey(nameServer)) {
+								flag = true;
+								break;
+							}
+						}
+						if (flag) { // si il y a un server en commun dans le mega server
+							server.broadcast(new FusionInitKO(10), 10);
+						} else {
+							server.broadcast(new FusionInitOK(9, nameServer, server.address, listServer.size(), listServer.keySet()), 9);
+						}
+
+						if (fusionPack.nameServer().compareTo(nameServer) < 0) {
+							leader = false;
+						}
+
+						listServer.put(fusionPack.nameServer(), key);
+						for (var tmpServer : fusionPack.nameServers()) {
+							listServer.put(tmpServer, null);
+						}
+					} else {
+						/*
+						// Si ce n'est pas le leader de son mega server
+						listServer.values().forEach(e -> {
+							var context = (Context) e.attachment();
+							if (context.server.isLeader()) {
+								try {
+									server.broadcast(new FusionInitFWD(11, context.server.address), 11);
+								} catch (IOException ioe) {
+									// Do nothing?
+								}
+							}
+						});
+						*/
+					}
+					fusionInitReader.reset();
+					break;
+				case REFILL:
+					break;
+				case ERROR:
+					return 0;
+			}
+			return 1;
+		}
+
+		private int processInFusionInitOK() throws IOException {
+			Reader.ProcessStatus status;
+			status = fusionInitOKReader.process(bufferIn);
+			switch (status) {
+				case DONE :
+					var fusionPack = fusionInitOKReader.get();
+					boolean flag = false;
+					for (var tmpServer : fusionPack.nameServers()) {
+						if (listServer.containsKey(tmpServer)) {
+							flag = true;
+							break;
+						}
+					}
+					if (flag) {
+						server.broadcast(new FusionInitKO(10), 10);
+					} else {
+						if (fusionPack.nameAddress().compareTo(nameServer) < 0) {
+							leader = false;
+						}
+						listServer.put(fusionPack.nameAddress(), key);
+						for (var tmpServer: fusionPack.nameServers()) {
+							listServer.computeIfAbsent(tmpServer, k->null);	// rentre les noms des autre seveurs sans leur adresse
+						}
+						logger.info("FUSION DONE");
+					}
+					fusionInitOKReader.reset();
+					break;
+				case REFILL :
+					break;
+				case ERROR :
+					return 0;
+			}
+			return 1;
 		}
 
 		/**
 		 * Try to fill bufferOut from the message queue
 		 *
 		 */
-		private void processOut(int opCode) {
+		private void processOut() {
 			if (bufferOut.remaining() < Integer.BYTES) {
 				return;
 			}
-			if (opCode == 2) {
-				var serv = queue.poll();
-				if (serv == null) {
-					return;
-				}
-				var encodedServ = StandardCharsets.UTF_8.encode(serv);
-				bufferOut.putInt(2).putInt(encodedServ.remaining()).put(encodedServ);
-				bufferOut.limit(bufferOut.position());
-				return;
-			}
-			if (opCode == 3) {
-				bufferOut.putInt(3);
-				bufferOut.limit(bufferOut.position());
-				return;
-			}
-
 			var message = queueMsg.poll();
 			if (message == null) {
 				return;
 			}
-			var server = StandardCharsets.UTF_8.encode(message.getServerSrc());
-			if (server.remaining() > 100) {
-				return;
-			}
-			var login = StandardCharsets.UTF_8.encode(message.getLoginSrc());
-			if (login.remaining() > 30) {
-				return;
-			}
-			var text = StandardCharsets.UTF_8.encode(message.getMsg());
-			if (text.remaining() > 1024) {
-				return;
-			}
-			if (opCode == 4) {
-				bufferOut.limit(BUFFER_SIZE);
-				bufferOut.putInt(4).putInt(server.remaining()).put(server);
-				bufferOut.putInt(login.remaining()).put(login);
-				bufferOut.putInt(text.remaining()).put(text);
-				bufferOut.limit(bufferOut.position());
-			}
-			if (opCode == 5) {
-				var serverDst = StandardCharsets.UTF_8.encode(message.getServerDst());
-				if (serverDst.remaining() > 100) {
-					return;
-				}
-				var loginDst = StandardCharsets.UTF_8.encode(message.getLoginDst());
-				if (loginDst.remaining() > 30) {
-					return;
-				}
-				bufferOut.limit(bufferOut.limit());
-				bufferOut.putInt(5).putInt(server.remaining()).put(server);
-				bufferOut.putInt(login.remaining()).put(login);
-				bufferOut.putInt(serverDst.remaining()).put(serverDst);
-				bufferOut.putInt(loginDst.remaining()).put(loginDst);
-				bufferOut.putInt(text.remaining()).put(text);
-				bufferOut.limit(bufferOut.position());
-			}
-			if (opCode == 8) {
-
-			}
+			message.fillBuffer(bufferOut);
 		}
 
 		/**
@@ -210,18 +283,26 @@ public class ServerChaton {
 		 */
 
 		private void updateInterestOps() {
-			var ops = 0;
-			if (!closed && bufferIn.hasRemaining()) {
-				ops |= SelectionKey.OP_READ;
+			try {
+				if (!sc.finishConnect()) {
+					return;
+				}
+				var ops = 0;
+				if (!closed && bufferIn.hasRemaining()) {
+					ops |= SelectionKey.OP_READ;
+				}
+				if (bufferOut.position() != 0){
+					ops |= SelectionKey.OP_WRITE;
+				}
+				if (ops == 0) {
+					silentlyClose();
+					return;
+				}
+				key.interestOps(ops);
+			} catch (IOException ioe) {
+				// do nothing
 			}
-			if (bufferOut.position() != 0){
-				ops |= SelectionKey.OP_WRITE;
-			}
-			if (ops == 0) {
-				silentlyClose();
-				return;
-			}
-			key.interestOps(ops);
+
 		}
 
 		private void silentlyClose() {
@@ -285,6 +366,10 @@ public class ServerChaton {
 		selector = Selector.open();
 		listServer.put(nameServer, null);
 		this.console = new Thread(this::consoleRun);
+	}
+
+	public boolean isLeader() {
+		return leader;
 	}
 
 	private void consoleRun() {
@@ -356,6 +441,8 @@ public class ServerChaton {
 				sc.connect(new InetSocketAddress(commandSplit[1], Integer.parseInt(commandSplit[2])));
 				var context = (Context) server.attachment();
 				context.queueMessage(new FusionInit(8, nameServer, address, listServer.keySet()));
+			} else {
+				//TODO
 			}
 		}
 	}
@@ -431,7 +518,7 @@ public class ServerChaton {
 	 *
 	 * @param msg
 	 */
-	private void broadcast(Message msg, int opCode) {
+	private void broadcast(Message msg, int opCode) throws IOException {
 		switch (opCode) {
 			case 4: {
 				for (var key : selector.keys()) {
@@ -451,13 +538,38 @@ public class ServerChaton {
 				}
 				var context = (Context) client.attachment();
 				context.queueMessage(msg);
+				break;
 			}
-		}
-	}
 
-	private void sendLogin(SelectionKey key) {
-		var context = (Context) key.attachment();
-		context.queueString(nameServer);
+			case 10 : {
+				// go to case 9
+			}
+
+			case 9: {
+				var sc = SocketChannel.open();
+				sc.configureBlocking(false);
+				var server = sc.register(selector, SelectionKey.OP_CONNECT);
+				server.attach(new Context(this, server));
+				var port = (FusionInitOK) msg;
+				sc.connect(new InetSocketAddress(port.address().getAddress(), port.address().getPort()));	// socketAddress + port
+				var context = (Context) server.attachment();
+				context.queueMessage(msg);
+				break;
+			}
+
+			case 11: {
+				var sc = SocketChannel.open();
+				sc.configureBlocking(false);
+				var server = sc.register(selector, SelectionKey.OP_CONNECT);
+				var port = (FusionInitFWD) msg;
+				sc.connect(new InetSocketAddress(port.addressLeader().getAddress(), port.addressLeader().getPort()));	// socketAddress + port
+				var context = (Context) server.attachment();
+				context.queueMessage(msg);
+				break;
+			}
+
+			default: break;
+		}
 	}
 
 	public static void main(String[] args) throws NumberFormatException, IOException, InterruptedException {

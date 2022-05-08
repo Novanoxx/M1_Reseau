@@ -1,6 +1,15 @@
-package fr.upem.net.tcp.nonblocking.readers;
+package fr.upem.net.tcp.nonblocking.readers.type;
 
-public record PublicMessage(int opCode, String server, String login, String msg) implements Message {
+import java.nio.ByteBuffer;
+
+public record LoginRefused(int opCode) implements Message {
+    @Override
+    public void fillBuffer(ByteBuffer buffer) {
+        buffer.limit(10_000);
+        buffer.putInt(opCode);
+        buffer.limit(buffer.position());
+    }
+
     @Override
     public int getOpCode() {
         return opCode;
@@ -8,7 +17,7 @@ public record PublicMessage(int opCode, String server, String login, String msg)
 
     @Override
     public String getLoginSrc() {
-        return login;
+        return null;
     }
 
     @Override
@@ -18,12 +27,12 @@ public record PublicMessage(int opCode, String server, String login, String msg)
 
     @Override
     public String getMsg() {
-        return msg;
+        return null;
     }
 
     @Override
     public String getServerSrc() {
-        return server;
+        return null;
     }
 
     @Override

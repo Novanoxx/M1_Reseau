@@ -1,4 +1,4 @@
-package fr.upem.net.tcp.nonblocking.readers;
+package fr.upem.net.tcp.nonblocking.readers.type;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -7,18 +7,19 @@ import java.util.Set;
 
 public record FusionInit(int opCode, String nameServer, InetSocketAddress address, Set<String> nameServers) implements Message {
 
+    @Override
     public void fillBuffer(ByteBuffer buffer) {
-        var tmpBuffer = ByteBuffer.allocate(10_000);
-
-
+        buffer.limit(10_000);
         buffer.putInt(opCode);
 
         //nom du Leader
-        tmpBuffer.put(StandardCharsets.UTF_8.encode(nameServer));
-        tmpBuffer.flip();
-        buffer.putInt(tmpBuffer.remaining());
-        buffer.put(tmpBuffer);
-        tmpBuffer.clear();
+        var encoded = StandardCharsets.UTF_8.encode(nameServer);
+        if (encoded.remaining() > 100) {
+            System.out.println("nameServer too big");
+            return;
+        }
+        buffer.putInt(encoded.remaining());
+        buffer.put(encoded);
 
         //InetSocketAdress
         buffer.put((byte) 4);   //IPv4
@@ -30,12 +31,12 @@ public record FusionInit(int opCode, String nameServer, InetSocketAddress addres
 
         //tous les noms des serveurs
         nameServers.forEach(e -> {
-            tmpBuffer.put(StandardCharsets.UTF_8.encode(e));
-            tmpBuffer.flip();
-            buffer.putInt(tmpBuffer.remaining());
-            buffer.put(tmpBuffer);
-            tmpBuffer.clear();
+            var encodedServ = StandardCharsets.UTF_8.encode(e);
+            buffer.putInt(encodedServ.remaining());
+            buffer.put(encodedServ);
         });
+
+        buffer.limit(buffer.position());
     }
 
     @Override

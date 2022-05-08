@@ -1,5 +1,7 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
@@ -70,5 +72,11 @@ public class StringReader implements Reader<String> {
         state = State.WAITING_SIZE;
         bufferSize.clear();
         bufferText.clear();
+    }
+
+    @Override
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn) {
+        // not implemented
+        return 0;
     }
 }

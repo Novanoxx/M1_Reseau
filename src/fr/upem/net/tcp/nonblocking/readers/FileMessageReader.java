@@ -1,5 +1,8 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.type.FileMessage;
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
@@ -51,5 +54,11 @@ public class FileMessageReader implements Reader<FileMessage>{
         state = State.WAITING;
         block.clear();
         stringReader.reset();
+    }
+
+    @Override
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn) {
+        // not implemented
+        return 0;
     }
 }

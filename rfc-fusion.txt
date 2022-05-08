@@ -1,0 +1,236 @@
+Ce document décrit le protocole ChatFusion. Le protocole permet à des clients de communiquer avec un serveur ChatFusion. Les serveurs ChatFusion se comporte comme des serveurs de discussion classiques. L'originalité de ce protocole est de permettre à plusieurs serveurs de fusionner pour se comporter comme un seul serveur fusionné. L'ensemble des communications entre clients et serveurs se feront au dessus de TCP.
+
+
+Fonctionnement général et terminologie :
+----------------------------------------
+
+Chaque serveur possède un nom qui ne doit pas dépasser 96 octets une fois encodé en UTF8, ce nom est fixé pour toute la durée de vie du serveur. 
+
+Un "méga-serveur" désigne un ensemble de serveurs ChatFusion qui ont fusionné. Le leader d'un méga-serveur est le serveur ayant le plus petit nom dans l'ordre lexicographique (on compare d'abord les noms par leur taille et par l'ordre du dictionnaire). Si un serveur ChatFusion n'a jamais fusionné, il est un méga-serveur à lui tout seul et il est donc le leader.
+
+Le protocole ChatFusion va assurer qu'il y a une connexion TCP entre chaque membre du méga-serveur et le leader du méga-serveur. Toutes les communications entre les serveurs d'un méga-serveur se feront par le leader. Les membres d'un méga-serveur connaissent l'adresse de la socket du leader.
+
+
+
+Représentation des données :
+----------------------------
+
+Les entiers (INT) sur 4 octets signés et les longs (LONG) sur 4 octets signés sont tous transmis en BigEndian.
+
+Les chaînes de caractères (STRING) sont encodées en UTF-8 et précédées de la taille de leur représentation en octets sur un INT.
+
+    STRING = taille (INT) chaîne encodée en UTF-8
+
+Une adresse IP (IPADDRESS) est représentée par un octet valant 4 ou 6 selon que l'adresse est au format IPv4 ou IPv6 suivi des 4 octets ou 16 octets de l'adresse selon qu'elle est IPv4 ou IPv6.
+
+Une adresse de socket (SOCKETADDRESS) contenant un adresse IP et un numéro de port est représentée un IPADDRESS suivi d'un INT valant entre 0 et 65 535.
+
+   SOCKETADDRESS = adresse IP (IPADDRESS) + numéro de port entre 0 et 65 535 (INT)
+
+
+
+
+
+Descriptions des différentes actions de chat 
+--------------------------------------------
+
+Les communications entre clients et serveurs et entre les serveurs se fait au moyen de commandes qui sont des trames commençant par un octet signé (OPCODE) indiquant le type de la commande.
+
+1) Identification
+   --------------
+
+a) Commande du client
+   ------------------
+
+Pour pouvoir interagir avec un serveur, un client doit s'authentifier auprès de ce serveur. L'authentification est donc la seule action possible pour un client avant l'établissement d'une connexion. Il y a deux types d'authentifications possibles : une authentification anonyme et une authentification avec mot de passe. Dans les deux cas, le client propose un login qui sera sont identifiant sur le serveur. Le serveur ne doit en aucun cas avoir deux clients connectés et authentifiés avec le même login.
+
+Pour un identification anonyme, le client enverra la commande LOGIN_ANONYMOUS (0) d'OPCODE 0 suivi d'une STRING contenant le login. La string du LOGIN ne peut pas occuper plus de 30 octets.
+
+LOGIN_ANONYMOUS(0) = 0 (OPCODE) login (STRING<=30)
+
+Pour une identification avec mot de passe, le client enverra la commande LOGIN_PASSWORD (1) d'OPCODE 1 suivi d'une STRING contenant le login et d'une STRING contenant le mot de passe. Les deux strings ne peuvent pas faire plus de 30 octets.
+
+LOGIN_PASSWORD(1) = 1 (OPCODE) login (STRING<=30) password (STRING<=30) 
+
+
+Si le serveur accepte l'authentification du client, il renvoie la commande LOGIN_ACCEPTED(2) d'OPCODE 1. Cette commande contient le nom du serveur.
+
+LOGIN_ACCEPTED(2) = 2 (OPCODE) serveur name (STRING<=100)
+
+Si le serveur refuse l'authentification, il renvoie la commande LOGIN_REFUSED(3) d'OPCODE 3.
+
+
+Seule les commandes LOGIN_ANONYMOUS(0) et LOGIN_PASSWORD(1) peuvent être traitées par le serveur tant que le client n'est pas identifié avec succès (à l'exception des commandes FUSION_*, voir partie ??). L'identification ne peut avoir lieu qu'une seule fois avec succès.
+
+2) Fonctionnalité de chat
+   ----------------------
+
+a) Message public :
+   -----------------
+
+Pour envoyer un message à tous les clients connectés au méga-serveur, un client envoie une commande MESSAGE(4) d'OPCODE 4.
+
+MESSAGE(4) = 4 (OPCODE) server (STRING<=100) login (STRING<=30) msg (STRING<=1024)
+
+Le serveur doit être le nom du serveur au quel le client est connecté.
+Le login doit être le login utilisé lors de l'identification.
+Le message msg ne peut pas occuper plus de 1024 octets.
+
+Le serveur qui reçoit une commande MESSAGE(4) d'un client après avoir vérifié la validité du nom du serveur et du login va:
+
+1) envoyer cette même commande à tous les clients authentifiés sur le serveur serveur ;
+2) si ce serveur est le leader du méga-serveur, il va transmettre cette même commande à tous les autres serveurs du méga-serveur;
+3) si ce serveur n'est pas le leader du méga-serveur, il va transmettre cette commande au leader du méga-serveur.
+
+Si un serveur A reçoit une commande MESSAGE(4) d'un autre serveur B du même méga-serveur, il transmet cette commande sans vérification à tous ses clients authentifiés. De plus si A est le leader du méga-serveur, il transmet cette commande à tous les autres membres du méga-serveur à l'exception de B.
+
+EXEMPLE.
+
+On a un méga serveur composé des serveurs A,B et C avec A le leader (c'est celui qui a plus petit nom dans l'ordre du dictionnaire). Un client D authentifié avec le login clientD auprès du serveur C et veut envoyer un message public. Il envoie une commande MESSAGE [4,"A","ClientD","Bonjour"] au serveur C. Le serveur C la transmet à tous les clients authentifiés et au serveur leader "A". Le serveur A, en recevant le message de C, le transmet à tous ses clients authentifiés et le transmet au serveur B. Le serveur B, en le recevant, le transmet à tous ses clients authentifiés.
+
+b) Message privé :
+   ---------------
+
+Pour envoyer un message privé à un client ayant le login login_dest sur le serveur serveur_dest, un client envoie à son serveur une commande MESSAGE_PRIVATE(5) d'OPCODE 5.
+
+MESSAGE_PRIVATE(5) = 5 (OPCODE) server_src (STRING<=100) login_src (STRING<=30) server_dst (STRING<=100) login_dest (STRING<=30) msg (STRING<=1024)
+
+Le serveur_src doit être le nom du serveur au quel le client est connecté.
+Le login_src doit être le login utilisé par le client lors de l'authentification.
+Le serveur_dst est le nom du serveur sur lequel se trouve le destinataire du message privé.
+Le login_dst est le login du destinataire sur le serveur_dst.
+
+Si un serveur A reçoit une commande MESSAGE_PRIVATE(5) d'un client, après avoir vérifié sa validité, va :
+
+1) si server_dst est A, transférer la commande au client de login_dst s'il existe (sinon la commande est ignorée)
+2) si server_dst est un autre serveur, il va :
+   a) s'il n’est pas leader, transférer le message au leader
+   b) s'il est leader, transférer le message au server_dst s'il existe (sinon la commande est ignorée)
+
+Si un serveur A reçoit une commande MESSAGE_PRIVATE(5) d'un autre serveur B du même méga-serveur, il va :
+1) transmettre la commande au client de login login_dst (s'il existe) si le nom de A est server_dst 
+2) sinon, si A est bien le leader du méga-serveur, il transmet le message au serveur de nom server_dst (s'il existe)
+
+EXEMPLE.
+
+On a un méga-serveur composé des serveurs A,B et C avec A le leader (c'est celui qui a plus petit nom dans l'ordre du dictionnaire). Un client D  authentifié avec le login clientD auprès du serveur C veut envoyer un message privé au client E qui est authentifié avec le login clientE au prêt du serveur B. Le client D va envoyer au serveur C la commande [5,"C","clientD","B","clientE","Bonjour à toi clientE"].
+Le serveur C va envoyer cette commande au leader A qui va la transmettre au serveur B qui va enfin le transmettre au client ayant le login clientE (s'il existe).
+
+
+c) Envoi d'un fichier privé :
+   --------------------------
+
+L'envoi d'un fichier en privé suit la même logique que l'envoi des messages privés.
+Pour ne pas créer de commande de taille trop importante, le fichier à envoyer est coupé en n morceaux de taille au plus 5000 octets. Un client voulant envoyer un fichier au client ayant le login login_dest sur le serveur_dst enverra à son serveur une série de commandes FILE_PRIVATE d'OPCODE 6. Chaque commande FILE_PRIVATE correspondra à un morceau du fichier.
+
+FILE_PRIVATE(6) = 6 (OPCODE) server_src (STRING<=100) login_src (STRING<=30) server_dst (STRING<=100) login_dest (STRING<=30) filename (STRING<=100) nb_blocks (INT) block_size (INT) block (BYTES)
+
+
+Le serveur_src doit être le nom du serveur au quel le client est connecté.
+Le login_src doit être le login utilisé par le client lors de l'authentification.
+Le serveur_dst est le nom du serveur sur lequel se trouve le destinataire du message privé.
+Le login_dst est le login du destinataire sur le serveur_dst.
+Le filename est le nom du fichier.
+nb_blocks est le nombre total de morceau
+block_size est la taille en octets (<=5000) du morceau contenu dans cette commande
+block correspond aux octets du morceau.
+
+Les commandes FILE_PRIVATE(6) sont transmises selon le même protocole que les commandes MESSAGE_PRIVATE(5).
+
+Fusion entre serveurs :
+-----------------------
+
+Nous allons maintenant décrire le protocole pour qu'un serveur A (qui fait partie d'un méga-serveur) fusionne avec à un serveur B (qui fait partie d'un méga-serveur).
+Le serveur A doit connaître la socket adresse du serveur B.
+
+
+A) Initiation de la fusion
+  ------------------------
+
+Si A est le leader de son méga-serveur :
+----------------------------------------
+
+Si A est le leader de son méga-serveur et qu'aucune fusion n'est en cours, il établit une connexion vers B. Il envoie une commande FUSION_INIT(8) d'OPCODE 8. Si une fusion est en cours, il attend que la fusion soit terminée.
+
+FUSION_INIT(8) = 8 (OPCODE) name (STRING<=100) adresse (SOCKETADDRESS) nb_members (INT) name_0 (STRING<=100) name_1 ...
+
+name est le nom du serveur A
+address est l'adresse de la socket du serveur A
+nb_members est le nombre d'autres membres du méga-serveur de A
+name_0,name_1 sont les noms des autres membres du méga-serveur.
+
+En recevant cette commande,
+
+a) le serveur B, s'il est leader de son méga-serveur et qu'aucun membre de son méga-serveur n'a de nom en commun avec les noms du méga serveur de A, renvoie la commande FUSION_INIT_OK(9) d'OPCODE 9.
+
+FUSION_INIT_OK(9) = 9 (OPCODE) name (STRING<=100) adresse (SOCKETADDRESS) nb_members (INT) name_0 (STRING<=100) name_1 ...
+qui contient les mêmes informations que la commande FUSION_INIT mais pour le serveur B.
+
+On passe donc à l'étape de réalisation de la fusion (B) ci-après.
+
+b) si le serveur B est le leader de son méga-serveur et que les deux méga-serveurs contiennent un nom en commun, la fusion n'est pas possible. Le serveur B renvoie la commande 
+
+FUSION_INIT_KO(10)= 10 (OPCODE)
+
+c) si le serveur B n'est pas le leader de son méga-serveur, il envoie l'adresse de la socket de son leader avec la commande FUSION_INIT_FWD d'OPCODE 11 : 
+
+FUSION_INIT_FWD(11)= 11 (OPCODE) addresse_leader (SOCKETADDRESS)
+
+address_leader est l'adresse de la socket du leader du méga-serveur de B
+
+Quand A reçoit cette réponse, il va tenter d'établir une fusion avec le leader du méga-serveur de B dont il vient de recevoir l'adresse de la socket.
+
+
+Si A n'est pas le leader de son méga-serveur :
+----------------------------------------------
+
+
+Si A n'est pas pas le leader de son méga-serveur, il envoie une commande FUSION_REQUEST(12) d'OPCODE 12 à son leader pour lui signifier qu'il veut fusionner avec le méga-serveur dont B fait partie.
+
+FUSION_REQUEST(12) = 12 (OPCODE) address (SOCKETADDRESS)
+
+address est l'adresse de la socket du serveur B.
+
+En recevant la cette commande le leader de A va initier la fusion comme ci-dessus si aucune fusion n'est en cours. Si une fusion est en cours, le leader répondra avec la commande FUSION_REQUEST_RESP d'OPCODE 13 :
+
+FUSION_REQUEST(13) = 13 (OPCODE) status (BYTE)
+
+status vaudra 0 si la fusion n'est pas possible et vaudra 1 si la fusion a pu être initiée.
+
+
+B) Réalisation de la fusion :
+   -------------------------
+
+A cette étape, deux serveurs A et B qui sont tous les deux leaders de leur méga-serveur respectifs ont accepté de fusionner.
+
+A connaît le nom de B, l'adresse de sa socket et tous les noms des serveurs du méga-serveur de B.
+B connaît le nom de A, l'adresse de sa socket et tous les noms des serveurs du méga-serveur de A.
+
+A et B savent tous les deux que A va être le leader du nouveau méga-serveur.
+
+Le serveur B (qui ne sera plus leader car son nom est plus grand que celui de A) va contacter tous les membres de son méga-serveur pour les prévenir que le leader change et qu'il doivent aller se connecter auprès du nouveau leader. Sa connexion avec A sera utilisée pour les communications futures avec A qui est le nouveau leader du méga-serveur.
+
+Le serveur B envoie donc à tous les membres de sont méga-serveur, la commande FUSION_CHANGE_LEADER(14) d'OPCODE 14 :
+
+FUSION_CHANGE_LEADER(14) = 14 (OPCODE) address_leader (SOCKETADDRESS)
+
+address_leader est l'adresse de la socket de A.
+
+Il ferme ensuite les connections avec les autres membres de son méga-serveur.
+
+Quand un serveur reçoit une commande FUSION_CHANGE_LEADER(14) de son leader, il se connecte à l'adresse du nouveau leader et envoie une commande FUSION_MERGE(15) avec l'OPCODE 15.
+
+FUSION_MERGE(15) = 15 (OPCODE) name (STRING)
+
+name est le nom du serveur qui se connecte au nouveau leader.
+
+Quand le serveur A a reçu une connexion des tous les membres du méga-serveur de B, la fusion est terminée. 
+
+
+
+Problèmes connus
+----------------
+
+Ceci est un projet pédagogique. La fusion entre les serveurs n'est absolument pas sécurisée. Il est possible de se faire passer pour un autre serveur pendant la phase de fusion. Ceci pourrait être corrigé en utilisant des tokens pendant la fusion. 
+
+Le protocole ne permet aucune récupération si un serveur est redémarré ou tombe en panne.

@@ -1,9 +1,13 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.type.Message;
+import fr.upem.net.tcp.nonblocking.readers.type.PrivateMessage;
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
-public class PrivateMessageReader implements Reader<PrivateMessage>{
+public class PrivateMessageReader implements Reader<Message>{
     private enum State {
         DONE, WAITING, ERROR
     }
@@ -42,5 +46,9 @@ public class PrivateMessageReader implements Reader<PrivateMessage>{
         state = State.WAITING;
         lst.clear();
         reader.reset();
+    }
+
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn) {
+        return v.visit(this, bufferIn);
     }
 }

@@ -1,6 +1,12 @@
 package fr.upem.net.tcp.nonblocking;
 
 import fr.upem.net.tcp.nonblocking.readers.*;
+import fr.upem.net.tcp.nonblocking.readers.type.LoginAnonym;
+import fr.upem.net.tcp.nonblocking.readers.type.Message;
+import fr.upem.net.tcp.nonblocking.readers.type.PrivateMessage;
+import fr.upem.net.tcp.nonblocking.readers.type.PublicMessage;
+import fr.upem.net.tcp.nonblocking.readers.visitor.PrivateVisitor;
+import fr.upem.net.tcp.nonblocking.readers.visitor.PublicVisitor;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -11,7 +17,6 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
-import java.util.Objects;
 import java.util.Scanner;
 import java.util.logging.Logger;
 
@@ -45,11 +50,11 @@ public class ClientChat {
          *
          */
         private void processIn() {
-            Reader.ProcessStatus status;
             bufferIn.flip();
             int opCode = bufferIn.getInt();
             bufferIn.compact();
             while(true) {
+                Reader.ProcessStatus status;
                 switch (opCode) {
                     case 2 :
                         status = stringReader.process(bufferIn);
@@ -57,51 +62,32 @@ public class ClientChat {
                             case DONE:
                                 nameServer = stringReader.get();
                                 System.out.println("Welcome " + login + " in " + nameServer);
-                                stringReader.reset();
+                                logged = true;
                                 break;
                             case REFILL:
-                                return;
+                                break;
                             case ERROR:
                                 silentlyClose();
                                 return;
                         }
+                        stringReader.reset();
                         break;
 
                     case 3 :
                         System.out.println("Login failed");
-                        silentlyClose();
-                        break;
+                        return;
 
                     case 4 :
-                        status = publicReader.process(bufferIn);
-                        switch (status) {
-                            case DONE:
-                                System.out.println("Public: " + publicReader.get().login() + " from " + nameServer + " : " + publicReader.get().msg());
-                                publicReader.reset();
-                                break;
-                            case REFILL:
-                                return;
-                            case ERROR:
-                                silentlyClose();
-                                return;
-
-                        }
-                        break;
+                        PublicVisitor publicVisitor = new PublicVisitor();
+                        if(publicReader.accept(publicVisitor, bufferIn) == 0)
+                            silentlyClose();
 
                     case 5 :
-                        status = privateReader.process(bufferIn);
-                        switch (status) {
-                            case DONE:
-                                System.out.println("Private: " + privateReader.get().loginSrc() + " from " + privateReader.get().serverSrc() + " : " + privateReader.get().msg());
-                                privateReader.reset();
-                                break;
-                            case REFILL:
-                                return;
-                            case ERROR:
-                                silentlyClose();
-                                return;
-                        }
-                        break;
+                        PrivateVisitor privateVisitor = new PrivateVisitor();
+                        if(privateReader.accept(privateVisitor, bufferIn) == 0)
+                            silentlyClose();
+                    default:
+                        return;
                 }
             }
         }
@@ -112,7 +98,7 @@ public class ClientChat {
          */
         private void queueMessage(Message msg) {
             queueMessage.add(msg);
-            processOut(msg.getOpCode());
+            processOut();
             updateInterestOps();
         }
 
@@ -120,56 +106,18 @@ public class ClientChat {
          * Try to fill bufferOut from the message queue
          *
          */
-        private void processOut(int opCode) {
+        private void processOut() {
             if (bufferOut.position() != 0) {
+                return;
+            }
+            if(!bufferOut.hasRemaining()) {
                 return;
             }
             var message = queueMessage.poll();
             if (message == null) {
                 return;
             }
-
-            var login = UTF8.encode(message.getLoginSrc());
-            if (login.remaining() > 30) {
-                return;
-            }
-
-            if (opCode == 0) {
-                bufferOut.putInt(0).putInt(login.remaining()).put(login);
-                return;
-            }
-
-            var text = UTF8.encode(message.getMsg());
-            if (text.remaining() > 1024) {
-                return;
-            }
-
-            var server = UTF8.encode(message.getServerSrc());
-            if (server.remaining() > 100) {
-                return;
-            }
-
-            if (opCode == 4) {
-                bufferOut.putInt(4).putInt(server.remaining()).put(server);
-                bufferOut.putInt(login.remaining()).put(login);
-                bufferOut.putInt(text.remaining()).put(text);
-                return;
-            }
-            if (opCode == 5) {
-                var serverDst = UTF8.encode(message.getServerDst());
-                if (serverDst.remaining() > 100) {
-                    return;
-                }
-                var loginDst = UTF8.encode(message.getLoginDst());
-                if (loginDst.remaining() > 30) {
-                    return;
-                }
-                bufferOut.putInt(5).putInt(server.remaining()).put(server);
-                bufferOut.putInt(login.remaining()).put(login);
-                bufferOut.putInt(serverDst.remaining()).put(serverDst);
-                bufferOut.putInt(loginDst.remaining()).put(loginDst);
-                bufferOut.putInt(text.remaining()).put(text);
-            }
+            message.fillBuffer(bufferOut);
         }
 
         /**
@@ -240,7 +188,7 @@ public class ClientChat {
                 return; // selector lied
             }
             key.interestOps(SelectionKey.OP_READ);
-            queueMessage(new Login(0, login));
+            queueMessage(new LoginAnonym(0, login));
         }
     }
 
@@ -251,17 +199,16 @@ public class ClientChat {
     private final Selector selector;
     private final InetSocketAddress serverAddress;
     private String login;
-    private Path path;
     private final Thread console;
     private Context uniqueContext;
     private final ArrayDeque<Message> queueMessage = new ArrayDeque<>();
 
+    private static boolean logged = false;
     private static final Object lock = new Object();
 
     public ClientChat(InetSocketAddress serverAddress, Path path, String login) throws IOException {
         this.serverAddress = serverAddress;
         this.login = login;
-        this.path = path;
         this.sc = SocketChannel.open();
         this.selector = Selector.open();
         this.console = new Thread(this::consoleRun);
@@ -290,21 +237,27 @@ public class ClientChat {
 
     private void sendCommand(String msg) throws InterruptedException {
         synchronized (lock) {
-            String[] messagePrive;
-            if (msg.startsWith("@")) {
-                messagePrive = msg.split("@", 2);
-                String[] login0ServerMessage1 = messagePrive[1].split(":", 2);
-                String[] server0Message1 = login0ServerMessage1[1].split(" ", 2);
-                queueMessage.add(new PrivateMessage(5, uniqueContext.nameServer, login, server0Message1[0], login0ServerMessage1[0], server0Message1[1]));
-            }else {
-                queueMessage.add(new PublicMessage(4, uniqueContext.nameServer, login, msg));
+            if (logged) {
+                String[] messagePrive;
+                if (msg.startsWith("@")) {
+                    messagePrive = msg.split("@", 2);
+                    String[] login0ServerMessage1 = messagePrive[1].split(":", 2);
+                    String[] server0Message1 = login0ServerMessage1[1].split(" ", 2);
+                    queueMessage.add(new PrivateMessage(5, uniqueContext.nameServer, login, server0Message1[0], login0ServerMessage1[0], server0Message1[1]));
+                }else {
+                    queueMessage.add(new PublicMessage(4, uniqueContext.nameServer, login, msg));
+                }
+                selector.wakeup();
+            } else {
+                queueMessage.add(new LoginAnonym(0, msg));
+                selector.wakeup();
             }
-            selector.wakeup();
+
         }
     }
 
     /**
-     * Processes the command from the BlockingQueue 
+     * Processes the command from the BlockingQueue
      */
 
     private void processCommands() {
@@ -353,14 +306,6 @@ public class ClientChat {
         }
     }
 
-    private void silentlyClose(SelectionKey key) {
-        Channel sc = (Channel) key.channel();
-        try {
-            sc.close();
-        } catch (IOException e) {
-            // ignore exception
-        }
-    }
 
     public static void main(String[] args) throws NumberFormatException, IOException {
         if (args.length != 4) {

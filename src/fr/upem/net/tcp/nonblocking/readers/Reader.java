@@ -1,5 +1,7 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.nio.ByteBuffer;
 
 public interface Reader<T> {
@@ -11,5 +13,7 @@ public interface Reader<T> {
     public T get();
 
     public void reset();
+
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn);
 
 }

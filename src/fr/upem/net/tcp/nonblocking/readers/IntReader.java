@@ -1,5 +1,7 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.nio.ByteBuffer;
 
 public class IntReader implements Reader<Integer> {
@@ -51,5 +53,11 @@ public class IntReader implements Reader<Integer> {
     public void reset() {
         state = State.WAITING;
         internalBuffer.clear();
+    }
+
+    @Override
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn) {
+        // not implemented
+        return 0;
     }
 }

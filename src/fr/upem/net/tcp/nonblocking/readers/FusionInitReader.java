@@ -1,7 +1,11 @@
 package fr.upem.net.tcp.nonblocking.readers;
 
+import fr.upem.net.tcp.nonblocking.readers.type.FusionInit;
+import fr.upem.net.tcp.nonblocking.readers.visitor.ReaderVisitor;
+
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashSet;
 
 public class FusionInitReader implements Reader<FusionInit> {
@@ -10,26 +14,24 @@ public class FusionInitReader implements Reader<FusionInit> {
     }
 
     private State state = State.WAITING;
-    private  FusionInit privateMsg;
-    private final StringReader reader = new StringReader();
+    private  FusionInit fusionInitPack;
+    private final StringReader stringReader = new StringReader();
     private final IntReader intReader = new IntReader();
 
     @Override
-    public Reader.ProcessStatus process(ByteBuffer bb) {
-        var status = reader.process(bb);
-        if (status != Reader.ProcessStatus.DONE) {
+    public ProcessStatus process(ByteBuffer bb) {
+        var status = stringReader.process(bb);
+        if (status != ProcessStatus.DONE) {
             return status;
         }
-        var serverName = reader.get();
-        reader.reset();
-
+        var serverName = stringReader.get();
+        stringReader.reset();
 
         bb.flip();
         if (!bb.hasRemaining()) {
             return ProcessStatus.REFILL;
         }
-
-
+        // IPv4 or IPv6
         int nb;
         if(bb.get() == (byte) 4) {
             nb = 4;
@@ -45,43 +47,34 @@ public class FusionInitReader implements Reader<FusionInit> {
         }
         bb.compact();
 
-        status = intReader.process(bb);
-        if (status != ProcessStatus.DONE) {
-            return status;
+        // Retrieve port and nbServer
+        ArrayList<Integer> lstElem = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            status = intReader.process(bb);
+            if (status != ProcessStatus.DONE) {
+                return status;
+            }
+            lstElem.add(intReader.get());
+            intReader.reset();
         }
-        var port = intReader.get();
-        intReader.reset();
-
-        status = intReader.process(bb);
-        if (status != ProcessStatus.DONE) {
-            return status;
-        }
-        var nbServer = intReader.get();
-        intReader.reset();
 
         var set = new HashSet<String>();
-        for(var i = 0 ; i < nbServer - 1 ; i++){
-            status = reader.process(bb);
+        for(var i = 0 ; i < lstElem.get(1) - 1 ; i++){
+            status = stringReader.process(bb);
             if (status == ProcessStatus.DONE) {
-                set.add(reader.get());
-                reader.reset();
+                set.add(stringReader.get());
+                stringReader.reset();
             }
             else {
                 return status;
             }
         }
-        if (status == ProcessStatus.DONE) {
-            try {
-                if (nb == 4) {
-                    privateMsg = new FusionInit(8, serverName, new InetSocketAddress(Inet4Address.getByAddress(tmp), port), set);
-                } else {
-                    privateMsg = new FusionInit(8, serverName, new InetSocketAddress(Inet6Address.getByAddress(tmp), port), set);
-                }
-            } catch (UnknownHostException e) {
-                e.printStackTrace();
-            }
-            state = State.DONE;
+        try {
+            fusionInitPack = new FusionInit(8, serverName, new InetSocketAddress(Inet4Address.getByAddress(tmp), lstElem.get(0)), set);
+        } catch (UnknownHostException e) {
+            // do nothing?
         }
+        state = State.DONE;
         return status;
     }
 
@@ -89,14 +82,20 @@ public class FusionInitReader implements Reader<FusionInit> {
     public FusionInit get() {
         if (state != State.DONE)
             throw new IllegalStateException();
-        return privateMsg;
+        return fusionInitPack;
     }
 
     @Override
     public void reset() {
-        reader.reset();
+        stringReader.reset();
         intReader.reset();
         state = State.WAITING;
-        privateMsg = null;
+        fusionInitPack = null;
+    }
+
+    @Override
+    public int accept(ReaderVisitor v, ByteBuffer bufferIn) {
+        // not implemented
+        return 0;
     }
 }
